@@ -50,7 +50,18 @@ This creates `n8n-editor-0.0.1.vsix` in the root directory. Install it using the
 - For code nodes, switch to "Code" tab for JavaScript editing
 - Changes save automatically to n8n or press `Ctrl+S` / `Cmd+S`
 
-### 3. Preview Workflows
+### 3. External Editor Sync (AI Editors)
+
+For external editors (Cursor, Windsurf, etc.) that modify workflow files:
+
+```bash
+# After editing files in n8n-workflows/<workflow_folder>/nodes/
+touch n8n-workflows/<workflow_folder>/.n8n-sync
+```
+
+This triggers the extension to sync changes to n8n.
+
+### 4. Preview Workflows
 
 Click the eye icon in the toolbar to preview the workflow visually.
 

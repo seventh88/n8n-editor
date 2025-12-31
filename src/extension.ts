@@ -11,6 +11,7 @@ let currentWorkflowId: string | undefined = undefined;
 let nodesTreeProvider: NodesTreeProvider;
 let workflowsTreeProvider: WorkflowsTreeProvider;
 let n8nApi: N8NApi;
+let syncWatcher: vscode.FileSystemWatcher | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
     n8nApi = new N8NApi();
@@ -278,6 +279,81 @@ Changes will be saved to ${nodeFile} when you run "N8N: Save Workflow"`);
         }
     });
 
+    // Watch .n8n-sync file for external sync trigger (e.g., AI editors)
+    // Usage: touch n8n-workflows/<workflow_folder>/.n8n-sync
+    syncWatcher = vscode.workspace.createFileSystemWatcher('**/n8n-workflows/**/.n8n-sync');
+    syncWatcher.onDidChange(async uri => {
+        await triggerSync(uri.fsPath);
+    });
+    syncWatcher.onDidCreate(async uri => {
+        await triggerSync(uri.fsPath);
+    });
+    context.subscriptions.push(syncWatcher);
+
+    async function triggerSync(syncFilePath: string) {
+        const workflowFolder = path.dirname(syncFilePath);
+        const workflowFile = path.join(workflowFolder, 'workflow.json');
+
+        if (!fs.existsSync(workflowFile)) {
+            vscode.window.showErrorMessage('workflow.json not found');
+            return;
+        }
+
+        // Get workflowId from workflow.json
+        const workflow = JSON.parse(fs.readFileSync(workflowFile, 'utf8'));
+        const workflowId = workflow.id;
+
+        if (!workflowId) {
+            vscode.window.showErrorMessage('Workflow ID not found');
+            return;
+        }
+
+        try {
+            const nodesFolder = path.join(workflowFolder, 'nodes');
+            const nodeFiles = fs.readdirSync(nodesFolder).filter(f => f.endsWith('.json')).sort();
+            const updatedNodes: any[] = [];
+
+            for (const file of nodeFiles) {
+                const match = file.match(/^(\d+)_/);
+                if (!match) {
+                    continue;
+                }
+
+                const index = parseInt(match[1]);
+                const nodePath = path.join(nodesFolder, file);
+                let node = JSON.parse(fs.readFileSync(nodePath, 'utf8'));
+
+                // Check for corresponding .js file
+                const jsFile = file.replace('.json', '.js');
+                const jsPath = path.join(nodesFolder, jsFile);
+                if (fs.existsSync(jsPath)) {
+                    const jsContent = fs.readFileSync(jsPath, 'utf8');
+                    const codeFields = ['jsCode', 'functionCode', 'code', 'javascriptCode'];
+                    for (const field of codeFields) {
+                        if (node.parameters?.[field] !== undefined) {
+                            node.parameters[field] = jsContent;
+                            break;
+                        }
+                    }
+                }
+
+                updatedNodes[index] = node;
+            }
+
+            workflow.nodes = updatedNodes;
+            fs.writeFileSync(workflowFile, JSON.stringify(workflow, null, 2));
+
+            await n8nApi.updateWorkflow(workflowId, workflow);
+            currentWorkflowData = workflow;
+            nodesTreeProvider.updateWorkflow(workflow);
+
+            vscode.window.showInformationMessage(`Synced to n8n: ${workflow.name}`);
+        } catch (error) {
+            vscode.window.showErrorMessage(`Sync failed: ${error}`);
+        }
+    }
+
+    // Auto-sync on save within VS Code
     vscode.workspace.onDidSaveTextDocument(async doc => {
         if ((doc.fileName.endsWith('.js') || doc.fileName.endsWith('.json')) && 
             doc.fileName.includes('n8n-workflows') && 
